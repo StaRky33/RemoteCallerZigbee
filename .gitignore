@@ -1,0 +1,27 @@
+# ESP-IDF build output
+build/
+sdkconfig
+sdkconfig.old
+
+# Managed components (downloaded automatically)
+managed_components/
+dependencies.lock
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# JetBrains / CLion
+.idea/
+cmake-build-*/
+
+# macOS
+.DS_Store
+
+# Logs
+*.log
+idf_monitor_*.txt
+
+# Secrets / credentials
+secrets.h
+wifi_credentials.h
