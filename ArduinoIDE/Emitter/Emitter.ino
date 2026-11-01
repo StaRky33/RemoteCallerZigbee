@@ -22,26 +22,24 @@ constexpr Color GREEN  = {0,   255, 0};
 constexpr Color BLUE   = {0,   0,   255};
 constexpr Color YELLOW = {255, 160, 0};
 
+constexpr uint32_t BLINK_ON_MS  = 200;
+constexpr uint32_t BLINK_OFF_MS = 3000;
+
+volatile bool ledOn = false;
+
 ZigbeeSwitch zbSwitch(SWITCH_EP);  // client : envoie vers la light
 ZigbeeLight  zbLight(LIGHT_EP);    // serveur : reflète l'état de la light
 
+
 /********************* RGB LED functions **************************/
+void restoreLed() {
+  if (ledOn) setLed(EMITTER_ID == 1 ? GREEN : YELLOW);
+  else       setLed(OFF);
+}
+
 void onLightChange(bool state) {
-  if(state)
-  {
-    if (EMITTER_ID == 1)
-    {
-      setLed(GREEN);
-    }
-    else
-    {
-      setLed(YELLOW);
-    }
-  }
-  else
-  {
-    setLed(OFF);
-  }
+  ledOn = state;
+  restoreLed();
 }
 
 inline void setLed(Color c) {
@@ -49,6 +47,25 @@ inline void setLed(Color c) {
               (uint16_t)c.r * LED_BRIGHTNESS / 255,
               (uint16_t)c.g * LED_BRIGHTNESS / 255,
               (uint16_t)c.b * LED_BRIGHTNESS / 255);
+}
+
+
+// 200 ms red pulse, then 3 s pause, repeated while noLink is true
+void handleNoLinkBlink(bool noLink) {
+  static bool redOn = false;
+  static uint32_t t = 0;
+  uint32_t now = millis();
+
+  if (!noLink) {
+    if (redOn) { redOn = false; restoreLed(); }
+    t = now;
+    return;
+  }
+  if (!redOn && now - t >= BLINK_OFF_MS) {
+    redOn = true; t = now; setLed(RED);
+  } else if (redOn && now - t >= BLINK_ON_MS) {
+    redOn = false; t = now; restoreLed();
+  }
 }
 
 // Envoi direct d'une commande On/Off, sans binding
@@ -86,15 +103,19 @@ void setup() {
     Serial.println("Rebooting...");
     ESP.restart();
   }
-  Serial.println("Connecting to network");
-  while (!Zigbee.connected()) {
-    Serial.print(".");
-    delay(100);
-  }
-  Serial.println();
 }
 
 void loop() {
+  static bool joinedNow = false;
+  static uint32_t lastJoinCheck = 0;
+  if (millis() - lastJoinCheck >= 500) {
+    lastJoinCheck = millis();
+    esp_zb_lock_acquire(portMAX_DELAY);
+    joinedNow = esp_zb_bdb_dev_joined();
+    esp_zb_lock_release();
+  }
+
+  handleNoLinkBlink(!joinedNow);
   static bool lastBtn = HIGH;
   static uint32_t pressedAt = 0;
   bool btn = digitalRead(BUTTON_PIN);
@@ -104,10 +125,13 @@ void loop() {
   } else if (lastBtn == LOW && btn == HIGH) {
     uint32_t d = millis() - pressedAt;
     if (d > 50 && d < 3000) {
-      sendOnOff(0x0000, LIGHT_EP, ESP_ZB_ZCL_CMD_ON_OFF_ON_ID);
-      Serial.println("Button Pressed!");
-    } else if (d >= 3000) {
-      Zigbee.factoryReset();
+      if (Zigbee.connected()) {
+        sendOnOff(0x0000, LIGHT_EP, ESP_ZB_ZCL_CMD_ON_OFF_ON_ID);
+        Serial.println("Button Pressed!");
+      } else {
+        Serial.println("Button pressed, not connected");
+        setLed(RED); delay(200); restoreLed();   // immediate feedback (B)
+      }
     }
   }
   lastBtn = btn;
