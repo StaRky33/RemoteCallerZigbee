@@ -3,34 +3,52 @@
 #endif
 
 #include "Zigbee.h"
+#include <Arduino.h>
 
 #define LIGHT_EP_A 10   // emitter 1
 #define LIGHT_EP_B 11   // emitter 2
 #define SWITCH_EP  5
 #define BUTTON_PIN BOOT_PIN
+#define LED_BRIGHTNESS 40   // 0-255, global brightness (try 40-60 if too bright)
 #define LED_PIN    RGB_BUILTIN
+
+struct Color {
+  uint8_t r, g, b;
+};
+
+constexpr Color OFF    = {0,   0,   0};
+constexpr Color RED    = {255, 0,   0};
+constexpr Color GREEN  = {0,   255, 0};
+constexpr Color BLUE   = {0,   0,   255};
+constexpr Color YELLOW = {255, 160, 0};
+
+volatile bool stateA = false, stateB = false;
+volatile bool sendA = false, sendB = false;
 
 ZigbeeLight  zbLightA(LIGHT_EP_A);
 ZigbeeLight  zbLightB(LIGHT_EP_B);
 ZigbeeSwitch zbSwitch(SWITCH_EP);
 
-volatile bool stateA = false, stateB = false;
-volatile bool sendA = false, sendB = false;
+inline void setLed(Color c) {
+  rgbLedWrite(LED_PIN,
+              (uint16_t)c.r * LED_BRIGHTNESS / 255,
+              (uint16_t)c.g * LED_BRIGHTNESS / 255,
+              (uint16_t)c.b * LED_BRIGHTNESS / 255);
+}
 
 void updateLed() {
   if(stateA && stateB)
   {
-    rgbLedWrite(LED_PIN, 0, 0, 255); // Blue
+    setLed(BLUE);
   }
   else if(stateA || stateB)
   {
-    rgbLedWrite(LED_PIN, stateA ? 0 : 255, stateA ? 255 : 255, stateA ? 0 : 0); //Green or Yellow
+  setLed(stateA ? GREEN : YELLOW);
   }
   else
   {
-    rgbLedWrite(LED_PIN, 0, 0, 0); // Off
+    setLed(OFF);
   }
-  
 }
 
 void onLightA(bool s) {
@@ -59,7 +77,6 @@ void sendOnOff(uint16_t shortAddr, uint8_t dstEp, uint8_t cmdId) {
 
 void setup() {
   Serial.begin(115200);
-  delay(2000);
   pinMode(BUTTON_PIN, INPUT_PULLUP);
 
   zbLightA.onLightChange(onLightA);
@@ -72,6 +89,9 @@ void setup() {
   Zigbee.addEndpoint(&zbLightB);
   Zigbee.addEndpoint(&zbSwitch);
 
+  setLed(OFF);
+  Serial.println("\nInit");
+
   if (!Zigbee.begin(ZIGBEE_COORDINATOR)) {  
     while (true) {
       Serial.println("Zigbee.begin() FAILED");
@@ -79,7 +99,7 @@ void setup() {
     }
   }
   Zigbee.openNetwork(180);  // fenêtre d'appairage de 180 s
-  Serial.println("Coordinateur demarre");
+  Serial.println("Starting Coordinator");
 }
 
 void loop() {
@@ -99,7 +119,7 @@ void loop() {
       updateLed();
       sendOnOff(0xFFFD, LIGHT_EP_A, ESP_ZB_ZCL_CMD_ON_OFF_OFF_ID);
       sendOnOff(0xFFFD, LIGHT_EP_B, ESP_ZB_ZCL_CMD_ON_OFF_OFF_ID);
-      Serial.println("OFF envoye aux deux emetteurs");
+      Serial.println("OFF");
     } else if (d >= 3000) {
       Zigbee.factoryReset();
     }
@@ -109,12 +129,12 @@ void loop() {
   // An emitter asked for ON: confirm only to that emitter (endpoint = identity)
   if (sendA) {
     sendA = false;
-    Serial.println("Emetteur 1 -> ON");
+    Serial.println("E1 -> ON");
     sendOnOff(0xFFFD, LIGHT_EP_A, stateA ? ESP_ZB_ZCL_CMD_ON_OFF_ON_ID : ESP_ZB_ZCL_CMD_ON_OFF_OFF_ID);
   }
   if (sendB) {
     sendB = false;
-    Serial.println("Emetteur 2 -> ON");
+    Serial.println("E2 -> ON");
     sendOnOff(0xFFFD, LIGHT_EP_B, stateB ? ESP_ZB_ZCL_CMD_ON_OFF_ON_ID : ESP_ZB_ZCL_CMD_ON_OFF_OFF_ID);
   }
 

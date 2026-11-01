@@ -1,35 +1,54 @@
-#include <Arduino.h>
 #ifndef ZIGBEE_MODE_ED
 #error "Zigbee end device mode is not selected in Tools->Zigbee mode"
 #endif
 
 #include "Zigbee.h"
+#include <Arduino.h>
 
-/* Zigbee light bulb configuration */
-#define EMITTER_ID 1                 // 1 for the first emitter, 2 for the second
+#define EMITTER_ID 2 // 1 for the first emitter, 2 for the second
+#define LED_BRIGHTNESS 40   // 0-255, global brightness (try 40-60 if too bright)
+#define LED_PIN    RGB_BUILTIN
 #define LIGHT_EP   (9 + EMITTER_ID)  // 10 or 11
 #define SWITCH_EP  5
 #define BUTTON_PIN BOOT_PIN
-#define LED_PIN    RGB_BUILTIN
-uint8_t led = RGB_BUILTIN;
-uint8_t button = BOOT_PIN;
+
+struct Color {
+  uint8_t r, g, b;
+};
+
+constexpr Color OFF    = {0,   0,   0};
+constexpr Color RED    = {255, 0,   0};
+constexpr Color GREEN  = {0,   255, 0};
+constexpr Color BLUE   = {0,   0,   255};
+constexpr Color YELLOW = {255, 160, 0};
 
 ZigbeeSwitch zbSwitch(SWITCH_EP);  // client : envoie vers la light
 ZigbeeLight  zbLight(LIGHT_EP);    // serveur : reflète l'état de la light
 
 /********************* RGB LED functions **************************/
 void onLightChange(bool state) {
-  if (EMITTER_ID == 1)
+  if(state)
   {
-    rgbLedWrite(LED_PIN, state ? 0 : 0, state ? 255 : 0, state ? 0 : 0); // Green
+    if (EMITTER_ID == 1)
+    {
+      setLed(GREEN);
+    }
+    else
+    {
+      setLed(YELLOW);
+    }
   }
   else
   {
-    rgbLedWrite(LED_PIN, state ? 255 : 0, state ? 255 : 0, state ? 0 : 0); // Yellow
+    setLed(OFF);
   }
-  //rgbLedWrite(LED_PIN, state ? 255 : 0, state ? 255 : 0, state ? 255 : 0); // White
-  //rgbLedWrite(LED_PIN, state ? 255 : 0, state ? 0 : 0, state ? 0 : 0); // Red
-  //rgbLedWrite(LED_PIN, state ? 0 : 0, state ? 0 : 0, state ? 255 : 0); // Blue
+}
+
+inline void setLed(Color c) {
+  rgbLedWrite(LED_PIN,
+              (uint16_t)c.r * LED_BRIGHTNESS / 255,
+              (uint16_t)c.g * LED_BRIGHTNESS / 255,
+              (uint16_t)c.b * LED_BRIGHTNESS / 255);
 }
 
 // Envoi direct d'une commande On/Off, sans binding
@@ -59,7 +78,8 @@ void setup() {
   Zigbee.addEndpoint(&zbSwitch);
   Zigbee.addEndpoint(&zbLight);
   
-  Serial.println("\nConnecte");
+  setLed(OFF);
+  Serial.println("\nInit");
 
   if (!Zigbee.begin()) {
     Serial.println("Zigbee failed to start!");
@@ -84,7 +104,8 @@ void loop() {
   } else if (lastBtn == LOW && btn == HIGH) {
     uint32_t d = millis() - pressedAt;
     if (d > 50 && d < 3000) {
-      sendOnOff(0x0000, LIGHT_EP, ESP_ZB_ZCL_CMD_ON_OFF_ON_ID);  // always ON, never toggles
+      sendOnOff(0x0000, LIGHT_EP, ESP_ZB_ZCL_CMD_ON_OFF_ON_ID);
+      Serial.println("Button Pressed!");
     } else if (d >= 3000) {
       Zigbee.factoryReset();
     }
