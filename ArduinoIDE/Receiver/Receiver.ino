@@ -1,102 +1,95 @@
-// Copyright 2024 Espressif Systems (Shanghai) PTE LTD
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
-/**
- * @brief This example demonstrates simple Zigbee light bulb.
- *
- * The example demonstrates how to use Zigbee library to create a end device light bulb.
- * The light bulb is a Zigbee end device, which is controlled by a Zigbee coordinator.
- *
- * Proper Zigbee mode must be selected in Tools->Zigbee mode
- * and also the correct partition scheme must be selected in Tools->Partition Scheme.
- *
- * Please check the README.md for instructions and more detailed description.
- *
- * Created by Jan Procházka (https://github.com/P-R-O-C-H-Y/)
- */
-
-#include <Arduino.h>
-#ifndef ZIGBEE_MODE_ED
-#error "Zigbee end device mode is not selected in Tools->Zigbee mode"
+#ifndef ZIGBEE_MODE_ZCZR
+#error "Outils > Zigbee Mode > Zigbee ZCZR (coordinator/router)"
 #endif
 
 #include "Zigbee.h"
 
-/* Zigbee light bulb configuration */
-#define ZIGBEE_LIGHT_ENDPOINT 10
-uint8_t led = RGB_BUILTIN;
-uint8_t button = BOOT_PIN;
+#define LIGHT_EP   10
+#define SWITCH_EP  5
+#define BUTTON_PIN BOOT_PIN
+#define LED_PIN    RGB_BUILTIN
 
-ZigbeeLight zbLight = ZigbeeLight(ZIGBEE_LIGHT_ENDPOINT);
+ZigbeeLight  zbLight(LIGHT_EP);    // serveur On/Off : reçoit
+ZigbeeSwitch zbSwitch(SWITCH_EP);  // client On/Off : envoie
 
-/********************* RGB LED functions **************************/
-void setLED(bool value) {
-  digitalWrite(led, value);
+volatile bool stateChanged = false;
+volatile bool currentState = false;
+
+// Appelé par la pile Zigbee : on ne fait que mémoriser, l'envoi se fait dans loop()
+void onLightChange(bool state) {
+  //rgbLedWrite(LED_PIN, state ? 255 : 0, state ? 255 : 0, state ? 255 : 0); // White
+  //rgbLedWrite(LED_PIN, state ? 255 : 0, state ? 0 : 0, state ? 0 : 0); // Red
+  //rgbLedWrite(LED_PIN, state ? 0 : 0, state ? 255 : 0, state ? 0 : 0); // Green
+  //rgbLedWrite(LED_PIN, state ? 255 : 0, state ? 255 : 0, state ? 0 : 0); // Yellow
+  rgbLedWrite(LED_PIN, state ? 0 : 0, state ? 0 : 0, state ? 255 : 0); // Blue
+  if (state != currentState) {
+    currentState = state;
+    stateChanged = true;
+  }
 }
 
-/********************* Arduino functions **************************/
+// Envoi direct d'une commande On/Off, sans binding
+// cmdId : ESP_ZB_ZCL_CMD_ON_OFF_ON_ID, ESP_ZB_ZCL_CMD_ON_OFF_OFF_ID ou ESP_ZB_ZCL_CMD_ON_OFF_TOGGLE_ID
+void sendOnOff(uint16_t shortAddr, uint8_t dstEp, uint8_t cmdId) {
+  esp_zb_zcl_on_off_cmd_t cmd = {};
+  cmd.zcl_basic_cmd.src_endpoint = SWITCH_EP;  // endpoint client local
+  cmd.zcl_basic_cmd.dst_endpoint = dstEp;
+  cmd.zcl_basic_cmd.dst_addr_u.addr_short = shortAddr;
+  cmd.address_mode = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT;
+  cmd.on_off_cmd_id = cmdId;
+  esp_zb_lock_acquire(portMAX_DELAY);
+  esp_zb_zcl_on_off_cmd_req(&cmd);
+  esp_zb_lock_release();
+}
+
 void setup() {
   Serial.begin(115200);
+  delay(2000);
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
 
-  // Init LED and turn it OFF (if LED_PIN == RGB_BUILTIN, the rgbLedWrite() will be used under the hood)
-  pinMode(led, OUTPUT);
-  digitalWrite(led, LOW);
+  zbLight.onLightChange(onLightChange);
+  zbLight.setManufacturerAndModel("Espressif", "ZigbeeLightHub");
+  zbSwitch.setManufacturerAndModel("Espressif", "ZigbeeLightHubSwitch");
+  zbSwitch.allowMultipleBinding(true);
 
-  // Init button for factory reset
-  pinMode(button, INPUT_PULLUP);
-
-  //Optional: set Zigbee device name and model
-  zbLight.setManufacturerAndModel("Espressif", "ZBLightBulb");
-
-  // Set callback function for light change
-  zbLight.onLightChange(setLED);
-
-  //Add endpoint to Zigbee Core
-  Serial.println("Adding ZigbeeLight endpoint to Zigbee Core");
   Zigbee.addEndpoint(&zbLight);
+  Zigbee.addEndpoint(&zbSwitch);
 
-  // When all EPs are registered, start Zigbee. By default acts as ZIGBEE_END_DEVICE
-  if (!Zigbee.begin()) {
-    Serial.println("Zigbee failed to start!");
-    Serial.println("Rebooting...");
-    ESP.restart();
+  if (!Zigbee.begin(ZIGBEE_COORDINATOR)) {  
+    while (true) {
+      Serial.println("Zigbee.begin() FAILED");
+      delay(1000);
+    }
   }
-  Serial.println("Connecting to network");
-  while (!Zigbee.connected()) {
-    Serial.print(".");
-    delay(100);
-  }
-  Serial.println();
+  Zigbee.openNetwork(180);  // fenêtre d'appairage de 180 s
+  Serial.println("Coordinateur demarre");
 }
 
 void loop() {
-  // Checking button for factory reset
-  if (digitalRead(button) == LOW) {  // Push button pressed
-    // Key debounce handling
-    delay(100);
-    int startTime = millis();
-    while (digitalRead(button) == LOW) {
-      delay(50);
-      if ((millis() - startTime) > 3000) {
-        // If key pressed for more than 3secs, factory reset Zigbee and reboot
-        Serial.println("Resetting Zigbee to factory and rebooting in 1s.");
-        delay(1000);
-        Zigbee.factoryReset();
-      }
+  // Bouton local (BOOT) : maintenu 3 s = reset usine
+  static bool lastBtn = HIGH;
+  static uint32_t pressedAt = 0;
+  bool btn = digitalRead(BUTTON_PIN);
+
+  if (lastBtn == HIGH && btn == LOW) {
+    pressedAt = millis();
+  } else if (lastBtn == LOW && btn == HIGH) {
+    uint32_t d = millis() - pressedAt;
+    if (d > 50 && d < 3000) {
+      zbLight.setLight(!zbLight.getLightState());  // déclenche onLightChange
+    } else if (d >= 3000) {
+      Zigbee.factoryReset();
     }
-    // Toggle light by pressing the button
-    zbLight.setLight(!zbLight.getLightState());
   }
-  delay(100);
+  lastBtn = btn;
+
+  // Répercute l'état de la light vers les switches (broadcast)
+  if (stateChanged) {
+    stateChanged = false;
+    Serial.printf("Envoi broadcast: %s\n", currentState ? "ON" : "OFF");
+    sendOnOff(0xFFFD, LIGHT_EP,
+              currentState ? ESP_ZB_ZCL_CMD_ON_OFF_ON_ID : ESP_ZB_ZCL_CMD_ON_OFF_OFF_ID);
+  }
+
+  delay(10);
 }
