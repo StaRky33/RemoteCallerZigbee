@@ -4,28 +4,43 @@
 
 #include "Zigbee.h"
 
-#define LIGHT_EP   10
+#define LIGHT_EP_A 10   // emitter 1
+#define LIGHT_EP_B 11   // emitter 2
 #define SWITCH_EP  5
 #define BUTTON_PIN BOOT_PIN
 #define LED_PIN    RGB_BUILTIN
 
-ZigbeeLight  zbLight(LIGHT_EP);    // serveur On/Off : reçoit
-ZigbeeSwitch zbSwitch(SWITCH_EP);  // client On/Off : envoie
+ZigbeeLight  zbLightA(LIGHT_EP_A);
+ZigbeeLight  zbLightB(LIGHT_EP_B);
+ZigbeeSwitch zbSwitch(SWITCH_EP);
 
-volatile bool stateChanged = false;
-volatile bool currentState = false;
+volatile bool stateA = false, stateB = false;
+volatile bool sendA = false, sendB = false;
 
-// Appelé par la pile Zigbee : on ne fait que mémoriser, l'envoi se fait dans loop()
-void onLightChange(bool state) {
-  //rgbLedWrite(LED_PIN, state ? 255 : 0, state ? 255 : 0, state ? 255 : 0); // White
-  //rgbLedWrite(LED_PIN, state ? 255 : 0, state ? 0 : 0, state ? 0 : 0); // Red
-  //rgbLedWrite(LED_PIN, state ? 0 : 0, state ? 255 : 0, state ? 0 : 0); // Green
-  //rgbLedWrite(LED_PIN, state ? 255 : 0, state ? 255 : 0, state ? 0 : 0); // Yellow
-  rgbLedWrite(LED_PIN, state ? 0 : 0, state ? 0 : 0, state ? 255 : 0); // Blue
-  if (state != currentState) {
-    currentState = state;
-    stateChanged = true;
+void updateLed() {
+  if(stateA && stateB)
+  {
+    rgbLedWrite(LED_PIN, 0, 0, 255); // Blue
   }
+  else if(stateA || stateB)
+  {
+    rgbLedWrite(LED_PIN, stateA ? 0 : 255, stateA ? 255 : 255, stateA ? 0 : 0); //Green or Yellow
+  }
+  else
+  {
+    rgbLedWrite(LED_PIN, 0, 0, 0); // Off
+  }
+  
+}
+
+void onLightA(bool s) {
+  if (s != stateA) { stateA = s; sendA = true; }
+  updateLed();
+}
+
+void onLightB(bool s) {
+  if (s != stateB) { stateB = s; sendB = true; }
+  updateLed();
 }
 
 // Envoi direct d'une commande On/Off, sans binding
@@ -47,12 +62,14 @@ void setup() {
   delay(2000);
   pinMode(BUTTON_PIN, INPUT_PULLUP);
 
-  zbLight.onLightChange(onLightChange);
-  zbLight.setManufacturerAndModel("Espressif", "ZigbeeLightHub");
-  zbSwitch.setManufacturerAndModel("Espressif", "ZigbeeLightHubSwitch");
-  zbSwitch.allowMultipleBinding(true);
+  zbLightA.onLightChange(onLightA);
+  zbLightB.onLightChange(onLightB);
+  zbLightA.setManufacturerAndModel("Espressif", "ZigbeeHubA");
+  zbLightB.setManufacturerAndModel("Espressif", "ZigbeeHubB");
+  zbSwitch.setManufacturerAndModel("Espressif", "ZigbeeHubSwitch");
 
-  Zigbee.addEndpoint(&zbLight);
+  Zigbee.addEndpoint(&zbLightA);
+  Zigbee.addEndpoint(&zbLightB);
   Zigbee.addEndpoint(&zbSwitch);
 
   if (!Zigbee.begin(ZIGBEE_COORDINATOR)) {  
@@ -66,7 +83,6 @@ void setup() {
 }
 
 void loop() {
-  // Bouton local (BOOT) : maintenu 3 s = reset usine
   static bool lastBtn = HIGH;
   static uint32_t pressedAt = 0;
   bool btn = digitalRead(BUTTON_PIN);
@@ -76,19 +92,30 @@ void loop() {
   } else if (lastBtn == LOW && btn == HIGH) {
     uint32_t d = millis() - pressedAt;
     if (d > 50 && d < 3000) {
-      zbLight.setLight(!zbLight.getLightState());  // déclenche onLightChange
+      // Everything off: receiver + both emitters
+      stateA = false; stateB = false;
+      zbLightA.setLight(false);
+      zbLightB.setLight(false);
+      updateLed();
+      sendOnOff(0xFFFD, LIGHT_EP_A, ESP_ZB_ZCL_CMD_ON_OFF_OFF_ID);
+      sendOnOff(0xFFFD, LIGHT_EP_B, ESP_ZB_ZCL_CMD_ON_OFF_OFF_ID);
+      Serial.println("OFF envoye aux deux emetteurs");
     } else if (d >= 3000) {
       Zigbee.factoryReset();
     }
   }
   lastBtn = btn;
 
-  // Répercute l'état de la light vers les switches (broadcast)
-  if (stateChanged) {
-    stateChanged = false;
-    Serial.printf("Envoi broadcast: %s\n", currentState ? "ON" : "OFF");
-    sendOnOff(0xFFFD, LIGHT_EP,
-              currentState ? ESP_ZB_ZCL_CMD_ON_OFF_ON_ID : ESP_ZB_ZCL_CMD_ON_OFF_OFF_ID);
+  // An emitter asked for ON: confirm only to that emitter (endpoint = identity)
+  if (sendA) {
+    sendA = false;
+    Serial.println("Emetteur 1 -> ON");
+    sendOnOff(0xFFFD, LIGHT_EP_A, stateA ? ESP_ZB_ZCL_CMD_ON_OFF_ON_ID : ESP_ZB_ZCL_CMD_ON_OFF_OFF_ID);
+  }
+  if (sendB) {
+    sendB = false;
+    Serial.println("Emetteur 2 -> ON");
+    sendOnOff(0xFFFD, LIGHT_EP_B, stateB ? ESP_ZB_ZCL_CMD_ON_OFF_ON_ID : ESP_ZB_ZCL_CMD_ON_OFF_OFF_ID);
   }
 
   delay(10);

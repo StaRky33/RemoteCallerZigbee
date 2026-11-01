@@ -6,7 +6,8 @@
 #include "Zigbee.h"
 
 /* Zigbee light bulb configuration */
-#define LIGHT_EP   10
+#define EMITTER_ID 1                 // 1 for the first emitter, 2 for the second
+#define LIGHT_EP   (9 + EMITTER_ID)  // 10 or 11
 #define SWITCH_EP  5
 #define BUTTON_PIN BOOT_PIN
 #define LED_PIN    RGB_BUILTIN
@@ -18,10 +19,16 @@ ZigbeeLight  zbLight(LIGHT_EP);    // serveur : reflète l'état de la light
 
 /********************* RGB LED functions **************************/
 void onLightChange(bool state) {
+  if (EMITTER_ID == 1)
+  {
+    rgbLedWrite(LED_PIN, state ? 0 : 0, state ? 255 : 0, state ? 0 : 0); // Green
+  }
+  else
+  {
+    rgbLedWrite(LED_PIN, state ? 255 : 0, state ? 255 : 0, state ? 0 : 0); // Yellow
+  }
   //rgbLedWrite(LED_PIN, state ? 255 : 0, state ? 255 : 0, state ? 255 : 0); // White
   //rgbLedWrite(LED_PIN, state ? 255 : 0, state ? 0 : 0, state ? 0 : 0); // Red
-  //rgbLedWrite(LED_PIN, state ? 0 : 0, state ? 255 : 0, state ? 0 : 0); // Green
-  rgbLedWrite(LED_PIN, state ? 255 : 0, state ? 255 : 0, state ? 0 : 0); // Yellow
   //rgbLedWrite(LED_PIN, state ? 0 : 0, state ? 0 : 0, state ? 255 : 0); // Blue
 }
 
@@ -77,12 +84,7 @@ void loop() {
   } else if (lastBtn == LOW && btn == HIGH) {
     uint32_t d = millis() - pressedAt;
     if (d > 50 && d < 3000) {
-      sendOnOff(0x0000, LIGHT_EP, ESP_ZB_ZCL_CMD_ON_OFF_TOGGLE_ID);
-      /*if (zbSwitch.bound()) {
-        zbSwitch.lightToggle();  // la light décide, puis renvoie l'état à tous
-      } else {
-        Serial.println("Pas encore lie a la light");
-      }*/
+      sendOnOff(0x0000, LIGHT_EP, ESP_ZB_ZCL_CMD_ON_OFF_ON_ID);  // always ON, never toggles
     } else if (d >= 3000) {
       Zigbee.factoryReset();
     }
