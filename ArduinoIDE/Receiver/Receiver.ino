@@ -22,6 +22,10 @@ constexpr Color GREEN  = {0,   255, 0};
 constexpr Color BLUE   = {0,   0,   255};
 constexpr Color YELLOW = {255, 160, 0};
 
+constexpr uint32_t BLINK_ON_MS  = 200;
+constexpr uint32_t BLINK_OFF_MS = 3000;
+
+volatile bool ledOn = false;
 volatile bool stateA = false, stateB = false;
 volatile bool sendA = false, sendB = false;
 
@@ -29,6 +33,17 @@ ZigbeeLight  zbLightA(LIGHT_EP_A);
 ZigbeeLight  zbLightB(LIGHT_EP_B);
 ZigbeeSwitch zbSwitch(SWITCH_EP);
 
+uint8_t countPairedDevices() {
+  uint8_t n = 0;
+  esp_zb_nwk_info_iterator_t it = ESP_ZB_NWK_INFO_ITERATOR_INIT;
+  esp_zb_nwk_neighbor_info_t nbr;
+  esp_zb_lock_acquire(portMAX_DELAY);
+  while (esp_zb_nwk_get_next_neighbor(&it, &nbr) == ESP_OK) n++;
+  esp_zb_lock_release();
+  return n;
+}
+
+/********************* RGB LED functions **************************/
 inline void setLed(Color c) {
   rgbLedWrite(LED_PIN,
               (uint16_t)c.r * LED_BRIGHTNESS / 255,
@@ -48,6 +63,23 @@ void updateLed() {
   else
   {
     setLed(OFF);
+  }
+}
+// 200 ms red pulse, then 3 s pause, repeated while noLink is true
+void handleNoLinkBlink(bool noLink) {
+  static bool redOn = false;
+  static uint32_t t = 0;
+  uint32_t now = millis();
+
+  if (!noLink) {
+    if (redOn) { redOn = false; updateLed(); }
+    t = now;
+    return;
+  }
+  if (!redOn && now - t >= BLINK_OFF_MS) {
+    redOn = true; t = now; setLed(RED);
+  } else if (redOn && now - t >= BLINK_ON_MS) {
+    redOn = false; t = now; updateLed();
   }
 }
 
@@ -103,6 +135,15 @@ void setup() {
 }
 
 void loop() {
+  static uint8_t paired = 0;
+  static uint32_t lastCount = 0;
+  if (millis() - lastCount >= 1000) {          // poll once per second
+    lastCount = millis();
+    uint8_t n = countPairedDevices();
+    if (n != paired) { paired = n; Serial.printf("Paired devices: %u\n", n); }
+  }
+  handleNoLinkBlink(paired < 1);
+
   static bool lastBtn = HIGH;
   static uint32_t pressedAt = 0;
   bool btn = digitalRead(BUTTON_PIN);

@@ -4,9 +4,11 @@
 
 #include "Zigbee.h"
 #include <Arduino.h>
+#include <Preferences.h>
+#include <esp_partition.h>
 
-#define EMITTER_ID 2 // 1 for the first emitter, 2 for the second
-#define LED_BRIGHTNESS 40   // 0-255, global brightness (try 40-60 if too bright)
+#define EMITTER_ID 1        // 1 for the first emitter, 2 for the second
+#define LED_BRIGHTNESS 40   // 0-255, global brightness
 #define LED_PIN    RGB_BUILTIN
 #define LIGHT_EP   (9 + EMITTER_ID)  // 10 or 11
 #define SWITCH_EP  5
@@ -22,16 +24,25 @@ constexpr Color GREEN  = {0,   255, 0};
 constexpr Color BLUE   = {0,   0,   255};
 constexpr Color YELLOW = {255, 160, 0};
 
-constexpr uint32_t BLINK_ON_MS  = 200;
-constexpr uint32_t BLINK_OFF_MS = 3000;
+constexpr uint32_t BLINK_ON_MS    = 200;
+constexpr uint32_t BLINK_OFF_MS   = 3000;
+constexpr uint32_t WIPE_HOLD_MS   = 3000;
+constexpr uint8_t  MAX_BOOT_FAILS = 3;
 
 volatile bool ledOn = false;
+volatile bool joinedFlag = false;   // written by loop(), read by uiTask()
 
-ZigbeeSwitch zbSwitch(SWITCH_EP);  // client : envoie vers la light
-ZigbeeLight  zbLight(LIGHT_EP);    // serveur : reflète l'état de la light
-
+ZigbeeSwitch zbSwitch(SWITCH_EP);  // client: sends to the receiver
+ZigbeeLight  zbLight(LIGHT_EP);    // server: reflects the receiver's state
 
 /********************* RGB LED functions **************************/
+inline void setLed(Color c) {
+  rgbLedWrite(LED_PIN,
+              (uint16_t)c.r * LED_BRIGHTNESS / 255,
+              (uint16_t)c.g * LED_BRIGHTNESS / 255,
+              (uint16_t)c.b * LED_BRIGHTNESS / 255);
+}
+
 void restoreLed() {
   if (ledOn) setLed(EMITTER_ID == 1 ? GREEN : YELLOW);
   else       setLed(OFF);
@@ -41,14 +52,6 @@ void onLightChange(bool state) {
   ledOn = state;
   restoreLed();
 }
-
-inline void setLed(Color c) {
-  rgbLedWrite(LED_PIN,
-              (uint16_t)c.r * LED_BRIGHTNESS / 255,
-              (uint16_t)c.g * LED_BRIGHTNESS / 255,
-              (uint16_t)c.b * LED_BRIGHTNESS / 255);
-}
-
 
 // 200 ms red pulse, then 3 s pause, repeated while noLink is true
 void handleNoLinkBlink(bool noLink) {
@@ -68,11 +71,38 @@ void handleNoLinkBlink(bool noLink) {
   }
 }
 
-// Envoi direct d'une commande On/Off, sans binding
-// cmdId : ESP_ZB_ZCL_CMD_ON_OFF_ON_ID, ESP_ZB_ZCL_CMD_ON_OFF_OFF_ID ou ESP_ZB_ZCL_CMD_ON_OFF_TOGGLE_ID
+/********************* Zigbee storage wipe ************************/
+void wipeZigbeeStorage() {
+  const esp_partition_t* p = esp_partition_find_first(
+      ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY, "zb_storage");
+  if (p) esp_partition_erase_range(p, 0, p->size);
+  else Serial.println("zb_storage partition not found");
+}
+
+// Runs independently of Zigbee.begin(): blink + long press = wipe
+void uiTask(void*) {
+  bool lastBtn = HIGH;
+  uint32_t pressedAt = 0;
+  for (;;) {
+    bool btn = digitalRead(BUTTON_PIN);
+    if (lastBtn == HIGH && btn == LOW) pressedAt = millis();
+    if (btn == LOW && millis() - pressedAt >= WIPE_HOLD_MS) {
+      setLed(RED);
+      wipeZigbeeStorage();
+      delay(300);
+      ESP.restart();
+    }
+    lastBtn = btn;
+    handleNoLinkBlink(!joinedFlag);
+    vTaskDelay(pdMS_TO_TICKS(10));
+  }
+}
+
+/********************* Zigbee send ********************************/
+// Direct On/Off command, no binding needed
 void sendOnOff(uint16_t shortAddr, uint8_t dstEp, uint8_t cmdId) {
   esp_zb_zcl_on_off_cmd_t cmd = {};
-  cmd.zcl_basic_cmd.src_endpoint = SWITCH_EP;  // endpoint client local
+  cmd.zcl_basic_cmd.src_endpoint = SWITCH_EP;
   cmd.zcl_basic_cmd.dst_endpoint = dstEp;
   cmd.zcl_basic_cmd.dst_addr_u.addr_short = shortAddr;
   cmd.address_mode = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT;
@@ -86,6 +116,11 @@ void sendOnOff(uint16_t shortAddr, uint8_t dstEp, uint8_t cmdId) {
 void setup() {
   Serial.begin(115200);
   pinMode(BUTTON_PIN, INPUT_PULLUP);
+  setLed(OFF);
+  Serial.println("\nInit");
+
+  // Started before Zigbee.begin() so blink and long press work while it blocks
+  xTaskCreate(uiTask, "ui", 4096, nullptr, 1, nullptr);
 
   zbLight.onLightChange(onLightChange);
   zbLight.setManufacturerAndModel("Espressif", "ZigbeeSwitchNode");
@@ -94,15 +129,24 @@ void setup() {
 
   Zigbee.addEndpoint(&zbSwitch);
   Zigbee.addEndpoint(&zbLight);
-  
-  setLed(OFF);
-  Serial.println("\nInit");
+
+  Preferences prefs;
+  prefs.begin("zbrec", false);
 
   if (!Zigbee.begin()) {
-    Serial.println("Zigbee failed to start!");
-    Serial.println("Rebooting...");
+    uint8_t fails = prefs.getUChar("fails", 0) + 1;
+    Serial.printf("Zigbee start failed (%u in a row)\n", fails);
+    if (fails >= MAX_BOOT_FAILS) {   // too many failed boots: wipe and retry clean
+      prefs.putUChar("fails", 0);
+      wipeZigbeeStorage();
+    } else {
+      prefs.putUChar("fails", fails);
+    }
+    prefs.end();
     ESP.restart();
   }
+  prefs.putUChar("fails", 0);
+  prefs.end();
 }
 
 void loop() {
@@ -113,9 +157,9 @@ void loop() {
     esp_zb_lock_acquire(portMAX_DELAY);
     joinedNow = esp_zb_bdb_dev_joined();
     esp_zb_lock_release();
+    joinedFlag = joinedNow;
   }
 
-  handleNoLinkBlink(!joinedNow);
   static bool lastBtn = HIGH;
   static uint32_t pressedAt = 0;
   bool btn = digitalRead(BUTTON_PIN);
@@ -124,13 +168,12 @@ void loop() {
     pressedAt = millis();
   } else if (lastBtn == LOW && btn == HIGH) {
     uint32_t d = millis() - pressedAt;
-    if (d > 50 && d < 3000) {
-      if (Zigbee.connected()) {
+    if (d > 50 && d < WIPE_HOLD_MS) {   // long press is handled by uiTask
+      if (joinedNow) {
         sendOnOff(0x0000, LIGHT_EP, ESP_ZB_ZCL_CMD_ON_OFF_ON_ID);
         Serial.println("Button Pressed!");
       } else {
         Serial.println("Button pressed, not connected");
-        setLed(RED); delay(200); restoreLed();   // immediate feedback (B)
       }
     }
   }
