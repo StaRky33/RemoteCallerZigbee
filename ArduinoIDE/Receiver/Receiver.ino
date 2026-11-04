@@ -11,23 +11,44 @@
 #define BUTTON_PIN BOOT_PIN
 #define LED_BRIGHTNESS 40   // 0-255, global brightness (try 40-60 if too bright)
 #define LED_PIN    RGB_BUILTIN
+#define BUZZER_PIN 18
 
+struct Round { uint8_t beeps; uint8_t duty; };
 struct Color {
   uint8_t r, g, b;
 };
 
+constexpr uint32_t BUZZER_FREQ  = 2700;   // Hz, near a typical piezo resonance
+constexpr uint8_t  VOL_LOW      = 6;      // duty out of 255
+constexpr uint8_t  VOL_MID      = 60;
+constexpr uint8_t  VOL_HIGH     = 140;
+constexpr uint32_t BEEP_MS      = 150;
+constexpr uint32_t BEEP_GAP_MS  = 150;    // pause between beeps of one round
+constexpr uint32_t ROUND_GAP_MS = 10000;  // pause between rounds
+constexpr uint32_t BLINK_ON_MS  = 200;
+constexpr uint32_t BLINK_OFF_MS = 3000;
 constexpr Color OFF    = {0,   0,   0};
 constexpr Color RED    = {255, 0,   0};
 constexpr Color GREEN  = {0,   255, 0};
 constexpr Color BLUE   = {0,   0,   255};
 constexpr Color YELLOW = {255, 160, 0};
 
-constexpr uint32_t BLINK_ON_MS  = 200;
-constexpr uint32_t BLINK_OFF_MS = 3000;
+constexpr Round ALARM[] = {
+  {2, VOL_LOW},  {2, VOL_LOW},  {2, VOL_LOW},
+  {2, VOL_MID},  {2, VOL_MID},  {2, VOL_MID},
+  {2, VOL_HIGH}, {2, VOL_HIGH}, {2, VOL_HIGH},
+};
+
+constexpr uint8_t ALARM_ROUNDS = sizeof(ALARM) / sizeof(ALARM[0]);
 
 volatile bool ledOn = false;
 volatile bool stateA = false, stateB = false;
 volatile bool sendA = false, sendB = false;
+volatile bool alarmRequest = false;   // set from the Zigbee callbacks
+bool alarmActive = false;
+bool beepOn = false;
+uint8_t roundIdx = 0, beepIdx = 0;
+uint32_t buzzT = 0;
 
 ZigbeeLight  zbLightA(LIGHT_EP_A);
 ZigbeeLight  zbLightB(LIGHT_EP_B);
@@ -84,13 +105,52 @@ void handleNoLinkBlink(bool noLink) {
 }
 
 void onLightA(bool s) {
-  if (s != stateA) { stateA = s; sendA = true; }
+  if (s != stateA) { stateA = s; sendA = true; if (s) alarmRequest = true;}
   updateLed();
 }
 
 void onLightB(bool s) {
-  if (s != stateB) { stateB = s; sendB = true; }
+  if (s != stateB) { stateB = s; sendB = true; if (s) alarmRequest = true;}
   updateLed();
+}
+
+/***************** BUZZER FUNCTIONS ****************/
+void buzzerStart() {
+  alarmActive = true;
+  roundIdx = 0; beepIdx = 0; beepOn = false;
+  buzzT = millis() - ROUND_GAP_MS;   // first beep starts immediately
+}
+
+void buzzerStop() {
+  alarmActive = false;
+  beepOn = false;
+  ledcWrite(BUZZER_PIN, 0);
+}
+
+// Non-blocking: call it every loop()
+void handleBuzzer() {
+  if (!alarmActive) return;
+  uint32_t now = millis();
+  const Round& r = ALARM[roundIdx];
+
+  if (beepOn) {
+    if (now - buzzT >= BEEP_MS) {
+      ledcWrite(BUZZER_PIN, 0);
+      beepOn = false; buzzT = now; beepIdx++;
+      if (beepIdx >= r.beeps && roundIdx == ALARM_ROUNDS - 1) alarmActive = false;  // done
+    }
+    return;
+  }
+
+  uint32_t wait = (beepIdx == 0) ? ROUND_GAP_MS : BEEP_GAP_MS;
+  if (beepIdx >= r.beeps) {            // round finished, move to the next one
+    if (now - buzzT >= ROUND_GAP_MS) { roundIdx++; beepIdx = 0; buzzT = now - ROUND_GAP_MS; }
+    return;
+  }
+  if (now - buzzT >= wait) {
+    ledcWrite(BUZZER_PIN, r.duty);
+    beepOn = true; buzzT = now;
+  }
 }
 
 // Envoi direct d'une commande On/Off, sans binding
@@ -123,6 +183,9 @@ void setup() {
 
   setLed(OFF);
   Serial.println("\nInit");
+
+  ledcAttach(BUZZER_PIN, BUZZER_FREQ, 8);
+  ledcWrite(BUZZER_PIN, 0);
 
   if (!Zigbee.begin(ZIGBEE_COORDINATOR)) {  
     while (true) {
@@ -160,6 +223,7 @@ void loop() {
       updateLed();
       sendOnOff(0xFFFD, LIGHT_EP_A, ESP_ZB_ZCL_CMD_ON_OFF_OFF_ID);
       sendOnOff(0xFFFD, LIGHT_EP_B, ESP_ZB_ZCL_CMD_ON_OFF_OFF_ID);
+      buzzerStop();
       Serial.println("OFF");
     } else if (d >= 3000) {
       Zigbee.factoryReset();
@@ -178,6 +242,12 @@ void loop() {
     Serial.println("E2 -> ON");
     sendOnOff(0xFFFD, LIGHT_EP_B, stateB ? ESP_ZB_ZCL_CMD_ON_OFF_ON_ID : ESP_ZB_ZCL_CMD_ON_OFF_OFF_ID);
   }
+  
+  if (alarmRequest) {
+    alarmRequest = false;
+    if (!alarmActive) buzzerStart();
+  }
+  handleBuzzer();
 
   delay(10);
 }
