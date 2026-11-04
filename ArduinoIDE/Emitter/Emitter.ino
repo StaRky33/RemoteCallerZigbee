@@ -8,11 +8,12 @@
 #include <esp_partition.h>
 
 #define EMITTER_ID 1        // 1 for the first emitter, 2 for the second
-#define LED_BRIGHTNESS 40   // 0-255, global brightness
-#define LED_PIN    RGB_BUILTIN
-#define LIGHT_EP   (9 + EMITTER_ID)  // 10 or 11
 #define SWITCH_EP  5
+#define LIGHT_EP   (9 + EMITTER_ID)  // 10 or 11
+#define LED_PIN    RGB_BUILTIN
 #define BUTTON_PIN BOOT_PIN
+#define BTN_UP_PIN   19
+#define BTN_DOWN_PIN 20
 
 struct Color {
   uint8_t r, g, b;
@@ -23,12 +24,16 @@ constexpr Color RED    = {255, 0,   0};
 constexpr Color GREEN  = {0,   255, 0};
 constexpr Color BLUE   = {0,   0,   255};
 constexpr Color YELLOW = {255, 160, 0};
-
+constexpr uint8_t BRIGHT_MIN  = 55;
+constexpr uint8_t BRIGHT_MAX  = 255;
+constexpr uint8_t BRIGHT_STEP = 20;
 constexpr uint32_t BLINK_ON_MS    = 200;
 constexpr uint32_t BLINK_OFF_MS   = 3000;
 constexpr uint32_t WIPE_HOLD_MS   = 3000;
 constexpr uint8_t  MAX_BOOT_FAILS = 3;
 
+volatile uint8_t brightness = BRIGHT_MIN;
+volatile bool previewActive = false;
 volatile bool ledOn = false;
 volatile bool joinedFlag = false;   // written by loop(), read by uiTask()
 
@@ -37,13 +42,15 @@ ZigbeeLight  zbLight(LIGHT_EP);    // server: reflects the receiver's state
 
 /********************* RGB LED functions **************************/
 inline void setLed(Color c) {
+  uint8_t b = brightness;
   rgbLedWrite(LED_PIN,
-              (uint16_t)c.r * LED_BRIGHTNESS / 255,
-              (uint16_t)c.g * LED_BRIGHTNESS / 255,
-              (uint16_t)c.b * LED_BRIGHTNESS / 255);
+              (uint16_t)c.r * b / 255,
+              (uint16_t)c.g * b / 255,
+              (uint16_t)c.b * b / 255);
 }
 
 void restoreLed() {
+  if (previewActive) return;
   if (ledOn) setLed(EMITTER_ID == 1 ? GREEN : YELLOW);
   else       setLed(OFF);
 }
@@ -55,6 +62,7 @@ void onLightChange(bool state) {
 
 // 200 ms red pulse, then 3 s pause, repeated while noLink is true
 void handleNoLinkBlink(bool noLink) {
+  if (previewActive) return;
   static bool redOn = false;
   static uint32_t t = 0;
   uint32_t now = millis();
@@ -68,6 +76,38 @@ void handleNoLinkBlink(bool noLink) {
     redOn = true; t = now; setLed(RED);
   } else if (redOn && now - t >= BLINK_ON_MS) {
     redOn = false; t = now; restoreLed();
+  }
+}
+
+void changeBrightness(int delta) {
+  int b = (int)brightness + delta;
+  if (b < BRIGHT_MIN) b = BRIGHT_MIN;
+  if (b > BRIGHT_MAX) b = BRIGHT_MAX;
+  brightness = b;
+  previewActive = true;
+  setLed(EMITTER_ID == 1 ? GREEN : YELLOW);               // preview at the new brightness
+}
+
+// Call every ~10 ms
+void handleBrightnessButtons() {
+  static bool lastDown = HIGH, lastUp = HIGH;
+  static uint32_t lastEdge = 0;
+  bool down = digitalRead(BTN_DOWN_PIN);
+  bool up   = digitalRead(BTN_UP_PIN);
+  uint32_t now = millis();
+
+  if (down == lastDown && up == lastUp) return;
+  if (now - lastEdge < 30) return;      // debounce, the edge is seen again next call
+  lastEdge = now;
+
+  if (lastDown == HIGH && down == LOW) changeBrightness(-(int)BRIGHT_STEP);
+  if (lastUp   == HIGH && up   == LOW) changeBrightness(+(int)BRIGHT_STEP);
+
+  lastDown = down; lastUp = up;
+
+  if (down == HIGH && up == HIGH && previewActive) {   // both released
+    previewActive = false;
+    restoreLed();
   }
 }
 
@@ -94,6 +134,7 @@ void uiTask(void*) {
     }
     lastBtn = btn;
     handleNoLinkBlink(!joinedFlag);
+    handleBrightnessButtons();
     vTaskDelay(pdMS_TO_TICKS(10));
   }
 }
@@ -116,6 +157,8 @@ void sendOnOff(uint16_t shortAddr, uint8_t dstEp, uint8_t cmdId) {
 void setup() {
   Serial.begin(115200);
   pinMode(BUTTON_PIN, INPUT_PULLUP);
+  pinMode(BTN_DOWN_PIN, INPUT_PULLUP);
+  pinMode(BTN_UP_PIN, INPUT_PULLUP);
   setLed(OFF);
   Serial.println("\nInit");
 

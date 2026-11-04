@@ -9,9 +9,10 @@
 #define LIGHT_EP_B 11   // emitter 2
 #define SWITCH_EP  5
 #define BUTTON_PIN BOOT_PIN
-#define LED_BRIGHTNESS 40   // 0-255, global brightness (try 40-60 if too bright)
 #define LED_PIN    RGB_BUILTIN
 #define BUZZER_PIN 18
+#define BTN_UP_PIN   19
+#define BTN_DOWN_PIN 20
 
 struct Round { uint8_t beeps; uint8_t duty; };
 struct Color {
@@ -32,6 +33,9 @@ constexpr Color RED    = {255, 0,   0};
 constexpr Color GREEN  = {0,   255, 0};
 constexpr Color BLUE   = {0,   0,   255};
 constexpr Color YELLOW = {255, 160, 0};
+constexpr uint8_t BRIGHT_MIN  = 55;
+constexpr uint8_t BRIGHT_MAX  = 255;
+constexpr uint8_t BRIGHT_STEP = 20;
 
 constexpr Round ALARM[] = {
   {2, VOL_LOW},  {2, VOL_LOW},  {2, VOL_LOW},
@@ -45,6 +49,9 @@ volatile bool ledOn = false;
 volatile bool stateA = false, stateB = false;
 volatile bool sendA = false, sendB = false;
 volatile bool alarmRequest = false;   // set from the Zigbee callbacks
+volatile uint8_t brightness = BRIGHT_MIN;
+volatile bool previewActive = false;
+
 bool alarmActive = false;
 bool beepOn = false;
 uint8_t roundIdx = 0, beepIdx = 0;
@@ -66,13 +73,15 @@ uint8_t countPairedDevices() {
 
 /********************* RGB LED functions **************************/
 inline void setLed(Color c) {
+  uint8_t b = brightness;
   rgbLedWrite(LED_PIN,
-              (uint16_t)c.r * LED_BRIGHTNESS / 255,
-              (uint16_t)c.g * LED_BRIGHTNESS / 255,
-              (uint16_t)c.b * LED_BRIGHTNESS / 255);
+              (uint16_t)c.r * b / 255,
+              (uint16_t)c.g * b / 255,
+              (uint16_t)c.b * b / 255);
 }
 
 void updateLed() {
+  if (previewActive) return;
   if(stateA && stateB)
   {
     setLed(BLUE);
@@ -88,6 +97,7 @@ void updateLed() {
 }
 // 200 ms red pulse, then 3 s pause, repeated while noLink is true
 void handleNoLinkBlink(bool noLink) {
+  if (previewActive) return;
   static bool redOn = false;
   static uint32_t t = 0;
   uint32_t now = millis();
@@ -112,6 +122,38 @@ void onLightA(bool s) {
 void onLightB(bool s) {
   if (s != stateB) { stateB = s; sendB = true; if (s) alarmRequest = true;}
   updateLed();
+}
+
+void changeBrightness(int delta) {
+  int b = (int)brightness + delta;
+  if (b < BRIGHT_MIN) b = BRIGHT_MIN;
+  if (b > BRIGHT_MAX) b = BRIGHT_MAX;
+  brightness = b;
+  previewActive = true;
+  setLed(BLUE);               // preview at the new brightness
+}
+
+// Call every ~10 ms
+void handleBrightnessButtons() {
+  static bool lastDown = HIGH, lastUp = HIGH;
+  static uint32_t lastEdge = 0;
+  bool down = digitalRead(BTN_DOWN_PIN);
+  bool up   = digitalRead(BTN_UP_PIN);
+  uint32_t now = millis();
+
+  if (down == lastDown && up == lastUp) return;
+  if (now - lastEdge < 30) return;      // debounce, the edge is seen again next call
+  lastEdge = now;
+
+  if (lastDown == HIGH && down == LOW) changeBrightness(-(int)BRIGHT_STEP);
+  if (lastUp   == HIGH && up   == LOW) changeBrightness(+(int)BRIGHT_STEP);
+
+  lastDown = down; lastUp = up;
+
+    if (down == HIGH && up == HIGH && previewActive) {   // both released
+    previewActive = false;
+    updateLed();
+  }
 }
 
 /***************** BUZZER FUNCTIONS ****************/
@@ -170,6 +212,8 @@ void sendOnOff(uint16_t shortAddr, uint8_t dstEp, uint8_t cmdId) {
 void setup() {
   Serial.begin(115200);
   pinMode(BUTTON_PIN, INPUT_PULLUP);
+  pinMode(BTN_DOWN_PIN, INPUT_PULLUP);
+  pinMode(BTN_UP_PIN, INPUT_PULLUP);
 
   zbLightA.onLightChange(onLightA);
   zbLightB.onLightChange(onLightB);
@@ -248,6 +292,7 @@ void loop() {
     if (!alarmActive) buzzerStart();
   }
   handleBuzzer();
+  handleBrightnessButtons();
 
   delay(10);
 }
