@@ -49,9 +49,10 @@ constexpr Color YELLOW = {255, 160, 0};   // 255,255,0 looks greenish on WS2812
 constexpr Color EMITTER_COLOR = (DEVICE_INDEX == 1) ? GREEN : YELLOW;
 constexpr Color PREVIEW_COLOR = IS_RECEIVER ? BLUE : EMITTER_COLOR;
 
-constexpr uint8_t  BRIGHT_MIN  = 55;
+constexpr uint8_t  BRIGHT_MIN  = 15;
 constexpr uint8_t  BRIGHT_MAX  = 255;
-constexpr uint8_t  BRIGHT_STEP = 20;
+constexpr uint8_t  BRIGHT_STEP = 48;
+constexpr uint8_t  BRIGHT_DEFAULT = 255;   
 constexpr uint32_t BLINK_ON_MS  = 200;
 constexpr uint32_t BLINK_OFF_MS = 3000;
 constexpr uint32_t LONG_PRESS_MS = 3000;
@@ -67,7 +68,7 @@ constexpr uint32_t ROUND_GAP_MS = 10000;
 
 constexpr uint8_t MAX_BOOT_FAILS = 3;
 
-volatile uint8_t brightness = BRIGHT_MIN;
+volatile uint8_t brightness = BRIGHT_DEFAULT;
 volatile bool previewActive = false;
 
 ZigbeeSwitch zbSwitch(SWITCH_EP);
@@ -96,6 +97,29 @@ volatile bool joinedFlag = false;   // written by loop(), read by uiTask()
 
 ZigbeeLight zbLight(LIGHT_EP);
 #endif
+
+// Separate namespace from "zbrec": wiping zb_storage does not touch it.
+void loadBrightness() {
+  Preferences p;
+  p.begin("settings", true);
+  int b = p.getUChar("bright", BRIGHT_DEFAULT);
+  p.end();
+  if (b < BRIGHT_MIN) b = BRIGHT_MIN;
+  if (b > BRIGHT_MAX) b = BRIGHT_MAX;
+  brightness = b;
+}
+
+// Called on button release only, to limit flash wear.
+void saveBrightness() {
+  static uint8_t saved = 0;
+  uint8_t b = brightness;
+  if (b == saved) return;
+  Preferences p;
+  p.begin("settings", false);
+  p.putUChar("bright", b);
+  p.end();
+  saved = b;
+}
 
 /********************* LED **************************/
 inline void setLed(Color c) {
@@ -160,8 +184,9 @@ void handleBrightnessButtons() {
 
   lastDown = down; lastUp = up;
 
-  if (down == HIGH && up == HIGH && previewActive) {
+    if (down == HIGH && up == HIGH && previewActive) {
     previewActive = false;
+    saveBrightness();
     restoreLed();
   }
 }
@@ -241,6 +266,7 @@ void handleBuzzer() {
 
 void setup() {
   Serial.begin(115200);
+  loadBrightness();
   pinMode(BUTTON_PIN, INPUT_PULLUP);
   pinMode(BTN_DOWN_PIN, INPUT_PULLUP);
   pinMode(BTN_UP_PIN, INPUT_PULLUP);
