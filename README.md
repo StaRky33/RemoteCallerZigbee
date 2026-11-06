@@ -19,7 +19,7 @@ The firmware is compiled by GitHub Actions on every push to `main`, so the page 
 
 - **Zigbee network:** the receiver is the coordinator, the two emitters join as end devices. No hub or internet needed.
 - **Emitter identification:** each emitter has its own Zigbee endpoint (10 and 11), so the receiver knows which one called.
-- **Per-emitter feedback:** pressing an emitter lights that emitter and the receiver. Emitter 1 is green, emitter 2 is yellow, and the receiver shows blue when both are active.
+- **Per-emitter feedback:** pressing an emitter lights that emitter and the receiver. Emitter 1 is blue, emitter 2 is yellow, and the receiver shows green when both are active.
 - **Reset everything:** one press on the receiver turns off the receiver and both emitters and stops the buzzer.
 - **Escalating alarm:** when an emitter calls, the receiver's buzzer plays 9 rounds of 2 beeps, 10 s apart, at low, then medium, then high volume.
 - **Link status:** a short red flash (200 ms every 3 s) means the board is not connected. On an emitter it shows that it has no network. On the receiver it shows that no device is paired.
@@ -30,9 +30,9 @@ The firmware is compiled by GitHub Actions on every push to `main`, so the page 
 
 | Color | Emitter | Receiver |
 |---|---|---|
-| Green | Emitter 1 is on | Emitter 1 is on |
+| Blue | Emitter 1 is on | Emitter 1 is on |
 | Yellow | Emitter 2 is on | Emitter 2 is on |
-| Blue | Brightness preview (receiver) | Both emitters are on |
+| Green | Brightness preview (receiver) | Both emitters are on |
 | Red flash | Not connected | No device paired |
 | Off | Idle | Idle |
 
