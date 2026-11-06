@@ -1,6 +1,8 @@
 // DEVICE_INDEX: 1 = emitter 1, 2 = emitter 2, 3 = receiver
 // Tools > Zigbee Mode: ED for 1 and 2, ZCZR (coordinator/router) for 3.
-#define DEVICE_INDEX 3
+#ifndef DEVICE_INDEX
+#define DEVICE_INDEX 1
+#endif
 
 #define IS_RECEIVER (DEVICE_INDEX == 3)
 

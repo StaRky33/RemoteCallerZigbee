@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RemoteCallerZigbee flasher</title>
+  <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; }
+    .card { border: 1px solid #8884; border-radius: 8px; padding: 1rem; margin: 1rem 0; }
+    h2 { margin-top: 0; }
+  </style>
+</head>
+<body>
+  <h1>RemoteCallerZigbee</h1>
+  <p>Plug an ESP32-C6 in over USB, then pick its role. Chrome or Edge on a computer is required.</p>
+
+  <div class="card">
+    <h2>Receiver</h2>
+    <p>Coordinator with the buzzer. Flash and power it first.</p>
+    <esp-web-install-button manifest="manifest-receiver.json"></esp-web-install-button>
+  </div>
+
+  <div class="card">
+    <h2>Emitter 1</h2>
+    <esp-web-install-button manifest="manifest-emitter1.json"></esp-web-install-button>
+  </div>
+
+  <div class="card">
+    <h2>Emitter 2</h2>
+    <esp-web-install-button manifest="manifest-emitter2.json"></esp-web-install-button>
+  </div>
+
+  <p><small>Tick "Erase device" for a first install or if pairing is stuck. It also resets the saved brightness.</small></p>
+</body>
+</html>

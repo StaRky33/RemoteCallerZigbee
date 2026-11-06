@@ -1,0 +1,102 @@
+name: Build and publish firmware
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "ArduinoIDE/RemoteCallerZigbee/**"
+      - "web/**"
+      - ".github/workflows/firmware.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+env:
+  CORE_VERSION: 3.3.12
+  SKETCH: ArduinoIDE/RemoteCallerZigbee
+  FQBN: esp32:esp32:esp32c6
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { index: 1, name: emitter1, mode: ed,   partition: zigbee }
+          - { index: 2, name: emitter2, mode: ed,   partition: zigbee }
+          - { index: 3, name: receiver, mode: zczr, partition: zigbee_zczr }
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: arduino/setup-arduino-cli@v2
+
+      - name: Install esp32 core
+        run: |
+          arduino-cli config init
+          arduino-cli config add board_manager.additional_urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+          arduino-cli core update-index
+          arduino-cli core install esp32:esp32@${CORE_VERSION}
+
+      # Prints the real option names so a wrong value is easy to spot
+      - name: Show board options
+        run: arduino-cli board details -b ${FQBN} | grep -iE "zigbee|partition|cdc|flash size" || true
+
+      - name: Compile
+        run: |
+          arduino-cli compile \
+            --fqbn "${FQBN}:ZigbeeMode=${{ matrix.mode }},PartitionScheme=${{ matrix.partition }},CDCOnBoot=cdc" \
+            --build-property "compiler.cpp.extra_flags=-DDEVICE_INDEX=${{ matrix.index }}" \
+            --output-dir out \
+            "${SKETCH}"
+          ls -l out
+          cp out/*.merged.bin "${{ matrix.name }}.bin"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fw-${{ matrix.name }}
+          path: ${{ matrix.name }}.bin
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: fw
+
+      - name: Assemble site
+        run: |
+          mkdir site
+          cp web/index.html site/
+          for n in emitter1 emitter2 receiver; do
+            cp fw/fw-$n/$n.bin site/
+            cat > site/manifest-$n.json <<EOF
+          {
+            "name": "RemoteCallerZigbee $n",
+            "version": "build ${{ github.run_number }}",
+            "new_install_prompt_erase": true,
+            "builds": [
+              {
+                "chipFamily": "ESP32-C6",
+                "parts": [ { "path": "$n.bin", "offset": 0 } ]
+              }
+            ]
+          }
+          EOF
+          done
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deployment
+        uses: actions/deploy-pages@v4
