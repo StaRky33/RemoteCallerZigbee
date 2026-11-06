@@ -48,8 +48,8 @@ constexpr Color GREEN  = {0,   255, 0};
 constexpr Color BLUE   = {0,   0,   255};
 constexpr Color YELLOW = {255, 160, 0};   // 255,255,0 looks greenish on WS2812
 
-constexpr Color EMITTER_COLOR = (DEVICE_INDEX == 1) ? GREEN : YELLOW;
-constexpr Color PREVIEW_COLOR = IS_RECEIVER ? BLUE : EMITTER_COLOR;
+constexpr Color EMITTER_COLOR = (DEVICE_INDEX == 1) ? BLUE : YELLOW;
+constexpr Color PREVIEW_COLOR = IS_RECEIVER ? GREEN : EMITTER_COLOR;
 
 constexpr uint8_t  BRIGHT_MIN  = 15;
 constexpr uint8_t  BRIGHT_MAX  = 255;
